@@ -134,39 +134,83 @@ jobs:
       - name: "Run positive connection tests"
         shell: bash
         env:
-          # Five endpoints that must be present in CONNECTION_WHITELIST
+          # Five endpoints that must be present in CONNECTION_WHITELIST.
+          # Tests run in parallel; each endpoint gets up to 3 attempts
+          # with a 10 second timeout per attempt so transient network
+          # conditions outside of the runner do not produce flakes.
           POSITIVE_TARGETS: |
             api.github.com:443
             pypi.org:443
             files.pythonhosted.org:443
             ghcr.io:443
             raw.githubusercontent.com:443
+          CONNECT_TIMEOUT: "10"
+          MAX_ATTEMPTS: "3"
         run: |
           set -u
           summary="$GITHUB_STEP_SUMMARY"
+          results_dir="$(mktemp -d)"
+
+          probe() {
+            local target="$1"
+            local host="${target%:*}"
+            local port="${target##*:}"
+            local attempt=1
+            local status="fail"
+            local attempts_taken=0
+            while [ "$attempt" -le "$MAX_ATTEMPTS" ]; do
+              attempts_taken="$attempt"
+              if timeout "$CONNECT_TIMEOUT" \
+                bash -c "</dev/tcp/${host}/${port}" 2>/dev/null; then
+                status="ok"
+                break
+              fi
+              attempt=$((attempt + 1))
+            done
+            # Result file: <status>|<attempts>|<target>
+            printf '%s|%d|%s\n' \
+              "$status" "$attempts_taken" "$target" \
+              > "${results_dir}/$$.$(echo "$target" | tr ':/' '__').out"
+          }
+
+          # Launch all probes in parallel.
+          pids=()
+          while IFS= read -r target; do
+            [ -z "$target" ] && continue
+            probe "$target" &
+            pids+=("$!")
+          done <<< "$POSITIVE_TARGETS"
+          for pid in "${pids[@]}"; do
+            wait "$pid" || true
+          done
+
           {
-            echo "## ✅ Positive Connection Tests"
+            echo "## ✅ Test PERMITTED Connections"
             echo ""
             echo "Endpoints expected to be **permitted** by harden-runner"
             echo "(\`egress-policy: block\` with \`CONNECTION_WHITELIST\`)."
+            echo "Probes run in parallel with up to ${MAX_ATTEMPTS} "
+            echo "attempts each and a ${CONNECT_TIMEOUT}s per-attempt "
+            echo "timeout."
             echo ""
-            echo "| Endpoint | Expected | Result |"
-            echo "| -------- | -------- | ------ |"
+            echo "| Endpoint | Expected | Attempts | Result |"
+            echo "| -------- | -------- | -------- | ------ |"
           } >> "$summary"
 
           failures=0
-          while IFS= read -r target; do
-            [ -z "$target" ] && continue
-            host="${target%:*}"
-            port="${target##*:}"
-            if timeout 10 bash -c "</dev/tcp/${host}/${port}" 2>/dev/null; then
+          # Sort by target for stable report ordering.
+          for f in "${results_dir}"/*.out; do
+            [ -e "$f" ] || continue
+            IFS='|' read -r status attempts target < "$f"
+            if [ "$status" = "ok" ]; then
               result="✅ connected"
             else
               result="❌ FAILED"
               failures=$((failures + 1))
             fi
-            echo "| \`${target}\` | allowed | ${result} |" >> "$summary"
-          done <<< "$POSITIVE_TARGETS"
+            echo "| \`${target}\` | allowed | ${attempts} | ${result} |" \
+              >> "$summary"
+          done
 
           {
             echo ""
@@ -199,39 +243,70 @@ jobs:
       - name: "Run negative connection tests"
         shell: bash
         env:
-          # Five endpoints that must NOT appear in CONNECTION_WHITELIST
+          # Five endpoints that must NOT appear in CONNECTION_WHITELIST.
+          # Tests run in parallel. Failure (i.e. a successful connection)
+          # is immediate and final: no retries, because a blocked
+          # endpoint should never connect on any attempt.
           NEGATIVE_TARGETS: |
             www.example.org:443
             www.wikipedia.org:443
             www.cloudflare.com:443
             www.bbc.co.uk:443
             www.amazon.com:443
+          CONNECT_TIMEOUT: "10"
         run: |
           set -u
           summary="$GITHUB_STEP_SUMMARY"
+          results_dir="$(mktemp -d)"
+
+          probe() {
+            local target="$1"
+            local host="${target%:*}"
+            local port="${target##*:}"
+            local status="blocked"
+            if timeout "$CONNECT_TIMEOUT" \
+              bash -c "</dev/tcp/${host}/${port}" 2>/dev/null; then
+              status="leaked"
+            fi
+            printf '%s|%s\n' "$status" "$target" \
+              > "${results_dir}/$$.$(echo "$target" | tr ':/' '__').out"
+          }
+
+          # Launch all probes in parallel (single attempt each).
+          pids=()
+          while IFS= read -r target; do
+            [ -z "$target" ] && continue
+            probe "$target" &
+            pids+=("$!")
+          done <<< "$NEGATIVE_TARGETS"
+          for pid in "${pids[@]}"; do
+            wait "$pid" || true
+          done
+
           {
-            echo "## 🚫 Negative Connection Tests"
+            echo "## 🚫 Test DENIED Connections"
             echo ""
             echo "Endpoints expected to be **blocked** by harden-runner"
-            echo "(not present in \`CONNECTION_WHITELIST\`)."
+            echo "(not present in \`CONNECTION_WHITELIST\`). Probes run"
+            echo "in parallel with a single ${CONNECT_TIMEOUT}s attempt "
+            echo "each; denial should be immediate."
             echo ""
             echo "| Endpoint | Expected | Result |"
             echo "| -------- | -------- | ------ |"
           } >> "$summary"
 
           failures=0
-          while IFS= read -r target; do
-            [ -z "$target" ] && continue
-            host="${target%:*}"
-            port="${target##*:}"
-            if timeout 10 bash -c "</dev/tcp/${host}/${port}" 2>/dev/null; then
+          for f in "${results_dir}"/*.out; do
+            [ -e "$f" ] || continue
+            IFS='|' read -r status target < "$f"
+            if [ "$status" = "leaked" ]; then
               result="❌ LEAKED (connected)"
               failures=$((failures + 1))
             else
               result="✅ blocked"
             fi
             echo "| \`${target}\` | blocked | ${result} |" >> "$summary"
-          done <<< "$NEGATIVE_TARGETS"
+          done
 
           {
             echo ""
