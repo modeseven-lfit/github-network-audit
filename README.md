@@ -3,47 +3,71 @@
 # SPDX-FileCopyrightText: 2025 The Linux Foundation
 -->
 
-# 🛠️ Template Action
+# GitHub Network Audit
 
-This is a template for the other actions in this Github organisation.
+Audit outbound network connections from GitHub Actions workflow runs
+that use [step-security/harden-runner](https://github.com/step-security/harden-runner).
 
-## actions-template
+Collects network endpoint data from the StepSecurity API and generates
+consolidated allowlists for use with harden-runner's `egress-policy: block` mode.
 
-## Usage Example
+## Installation
 
-<!-- markdownlint-disable MD046 -->
-
-```yaml
-steps:
-  - name: "Action template"
-    id: action-template
-    uses: lfreleng-actions/actions-template@main
-    with:
-      input: "placeholder"
+```bash
+uv tool install -e .
 ```
 
-<!-- markdownlint-enable MD046 -->
+## Usage
 
-## Inputs
-
-<!-- markdownlint-disable MD013 -->
-
-| Name          | Required | Description  |
-| ------------- | -------- | ------------ |
-| input         | False    | Action input |
-
-<!-- markdownlint-enable MD013 -->
-
-## Outputs
+### Collect Data
 
 <!-- markdownlint-disable MD013 -->
 
-| Name          | Description   |
-| ------------- | ------------- |
-| output        | Action output |
+```bash
+# Set your GitHub token (needed for repo enumeration via GraphQL)
+export GITHUB_TOKEN="your-token"
+
+# Collect data for the entire org
+github-network-audit collect --org lfreleng-actions
+
+# Collect data for a specific repo
+github-network-audit collect --org lfreleng-actions --repo path-check-action
+
+# Force refresh of cached data
+github-network-audit collect --org lfreleng-actions --refresh
+```
+
+### Generate Reports
+
+```bash
+# All formats (JSON, CSV, Markdown)
+github-network-audit report --org lfreleng-actions
+
+# Specific format
+github-network-audit report --org lfreleng-actions --output-format md
+
+# Report for specific repo
+github-network-audit report --org lfreleng-actions --repo path-check-action
+```
 
 <!-- markdownlint-enable MD013 -->
 
-## Implementation Details
+## Output
+
+Reports are generated in the `{org}/` directory:
+
+- `allowlist.json` - Full allowlist with metadata
+- `allowlist.csv` - Spreadsheet-friendly format
+- `allowlist.md` - Markdown with harden-runner config snippet
+
+## Data Sources
+
+- **GitHub GraphQL API** - Repository enumeration (single query)
+- **StepSecurity API** - Network endpoint data (unauthenticated)
+
+All data is cached locally for idempotent operation.
 
 ## Notes
+
+The tool caches all intermediate data on disk. Subsequent runs use
+cached data by default. Use `--refresh` to force re-fetching from APIs.

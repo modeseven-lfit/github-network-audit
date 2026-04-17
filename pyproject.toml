@@ -1,0 +1,48 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2025 The Linux Foundation
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "github-network-audit"
+version = "0.1.0"
+description = "Audit outbound network connections from GitHub Actions workflow runs"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.11"
+dependencies = [
+    "typer>=0.15.0",
+    "requests>=2.32.0",
+    "rich>=13.0.0",
+]
+
+[project.scripts]
+github-network-audit = "github_network_audit.cli:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/github_network_audit"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+src = ["src"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "UP"]
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_configs = true
+
+[tool.interrogate]
+paths = ["src"]
+ignore-init-module = true
+ignore-init-method = true
+fail-under = 100
+
+[tool.basedpyright]
+pythonVersion = "3.11"
+typeCheckingMode = "basic"
