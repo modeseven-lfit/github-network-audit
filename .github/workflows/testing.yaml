@@ -18,9 +18,13 @@
 # Expected variables (configure at repo or org level):
 #
 #   CONNECTION_WHITELIST
-#     Newline-separated `host:port` entries (same format used by
-#     harden-runner's `allowed-endpoints`). Populate from
-#     `lfreleng-actions/allowlist.md`.
+#     `host:port` entries separated by newlines OR spaces. A
+#     `prepare` job below normalises the value so that downstream
+#     consumers do not need to worry about how it was stored (the
+#     harden-runner action's `allowed-endpoints` input is a single
+#     whitespace-separated string; pasting a multi-line variable
+#     directly can cause only the first line to be honoured).
+#     Populate from `lfreleng-actions/allowlist.md`.
 #
 #   VEXXHOST_CIDR_BLOCKS
 #     Newline-separated IPv4/IPv6 CIDR blocks for AS33028 (VEXXHOST).
@@ -48,11 +52,74 @@ permissions: {}
 
 jobs:
   # ---------------------------------------------------------------
+  # Normalise the CONNECTION_WHITELIST variable
+  #
+  # harden-runner expects `allowed-endpoints` as a single
+  # whitespace-separated string. Variables stored with newlines as
+  # separators only contribute their first line when substituted
+  # directly into the input. This job collapses any whitespace
+  # (including newlines) into single spaces and exposes the result
+  # as a job output that downstream jobs can reference.
+  # ---------------------------------------------------------------
+  prepare:
+    name: "Normalise allowlist"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 5
+    outputs:
+      whitelist: ${{ steps.normalise.outputs.whitelist }}
+      count: ${{ steps.normalise.outputs.count }}
+    steps:
+      # yamllint disable-line rule:line-length
+      - uses: step-security/harden-runner@6c3c2f2c1c457b00c10c4848d6f5491db3b629df # v2.18.0
+        with:
+          egress-policy: audit
+
+      - name: "Normalise CONNECTION_WHITELIST"
+        id: normalise
+        shell: bash
+        env:
+          RAW_WHITELIST: ${{ vars.CONNECTION_WHITELIST }}
+        run: |
+          set -u
+          if [ -z "${RAW_WHITELIST:-}" ]; then
+            echo "::error::CONNECTION_WHITELIST variable is not set"
+            exit 1
+          fi
+
+          # Collapse all whitespace (newlines, tabs, multiple spaces)
+          # into single spaces and strip leading/trailing whitespace.
+          normalised="$(printf '%s' "$RAW_WHITELIST" \
+            | tr '\n\t' '  ' \
+            | tr -s ' ' \
+            | sed 's/^ //; s/ $//')"
+
+          # Count entries for reporting.
+          count="$(printf '%s' "$normalised" | tr ' ' '\n' \
+            | grep -c . || true)"
+
+          {
+            echo "whitelist=${normalised}"
+            echo "count=${count}"
+          } >> "$GITHUB_OUTPUT"
+
+          {
+            echo "## 📋 Allowlist Preparation"
+            echo ""
+            echo "- Normalised **${count}** \`host:port\` entries from"
+            echo "  \`vars.CONNECTION_WHITELIST\`."
+            echo "- Output is a single whitespace-separated string"
+            echo "  suitable for harden-runner's \`allowed-endpoints\`."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ---------------------------------------------------------------
   # Positive test: whitelisted endpoints MUST be reachable
   # ---------------------------------------------------------------
   positive-connection-tests:
-    name: "Positive (allowed endpoints must connect)"
+    name: "Test ALLOWED Connections"
     runs-on: ubuntu-latest
+    needs: prepare
     permissions:
       contents: read
     timeout-minutes: 10
@@ -62,7 +129,7 @@ jobs:
         with:
           egress-policy: block
           disable-sudo: true
-          allowed-endpoints: ${{ vars.CONNECTION_WHITELIST }}
+          allowed-endpoints: ${{ needs.prepare.outputs.whitelist }}
 
       - name: "Run positive connection tests"
         shell: bash
@@ -115,8 +182,9 @@ jobs:
   # Negative test: non-whitelisted endpoints MUST be blocked
   # ---------------------------------------------------------------
   negative-connection-tests:
-    name: "Negative (non-allowed endpoints must block)"
+    name: "Test DENIED Connections"
     runs-on: ubuntu-latest
+    needs: prepare
     permissions:
       contents: read
     timeout-minutes: 10
@@ -126,7 +194,7 @@ jobs:
         with:
           egress-policy: block
           disable-sudo: true
-          allowed-endpoints: ${{ vars.CONNECTION_WHITELIST }}
+          allowed-endpoints: ${{ needs.prepare.outputs.whitelist }}
 
       - name: "Run negative connection tests"
         shell: bash
