@@ -1,0 +1,73 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 The Linux Foundation
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "github-network-audit"
+version = "0.1.0"
+description = "Audit outbound network connections from GitHub Actions workflow runs"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.11"
+dependencies = [
+    "typer>=0.15.0",
+    "requests>=2.32.0",
+    "rich>=13.0.0",
+]
+
+[project.scripts]
+github-network-audit = "github_network_audit.cli:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/github_network_audit"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+    "pytest-cov>=7.0.0",
+    "mypy>=1.20.0",
+    "types-requests>=2.32.0",
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+src = ["src"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "UP", "B"]
+ignore = ["B008"]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_configs = true
+ignore_missing_imports = true
+
+[tool.interrogate]
+paths = ["src"]
+ignore-init-module = true
+ignore-init-method = true
+fail-under = 100
+
+[tool.basedpyright]
+pythonVersion = "3.11"
+typeCheckingMode = "basic"
+reportMissingImports = false
+reportMissingModuleSource = false
+reportCallInDefaultInitializer = false
+reportUnusedParameter = false
+reportAny = false
+reportExplicitAny = false
+reportUnknownParameterType = false
+reportUnknownMemberType = false
+reportUnknownVariableType = false
+reportUnknownArgumentType = false
+reportMissingParameterType = false
+reportMissingTypeStubs = false
