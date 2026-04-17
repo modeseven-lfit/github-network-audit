@@ -35,11 +35,14 @@
 #     One `host:port` entry per line. MUST NOT appear in
 #     `CONNECTION_WHITELIST`; each entry is expected to be blocked.
 #
-#   VEXXHOST_CIDR_BLOCKS
-#     Newline-separated IPv4/IPv6 CIDR blocks for AS33028 (VEXXHOST).
-#     Informational only; harden-runner does not consume CIDRs.
+# Note: VEXXHOST CIDR blocks are intentionally NOT consumed by this
+# workflow. harden-runner's `allowed-endpoints` input is DNS-based
+# and does not accept CIDRs, so there is nothing to validate
+# automatically. See `resources/VEXXHOST.txt` and the README for
+# guidance on manual verification of blocked egress against
+# AS33028 ranges.
 
-name: "Test Connection Allowlist 🧪"
+name: "Test Network Connections 🧪"
 
 # yamllint disable-line rule:truthy
 on:
@@ -112,7 +115,7 @@ jobs:
   # Positive test: whitelisted endpoints MUST be reachable
   # ---------------------------------------------------------------
   positive-connection-tests:
-    name: "Test PERMITTED Connections"
+    name: "Test PERMITTED"
     runs-on: ubuntu-latest
     needs: prepare
     permissions:
@@ -147,7 +150,7 @@ jobs:
   # Negative test: non-whitelisted endpoints MUST be blocked
   # ---------------------------------------------------------------
   negative-connection-tests:
-    name: "Test DENIED Connections"
+    name: "Test DENIED"
     runs-on: ubuntu-latest
     needs: prepare
     permissions:
@@ -175,39 +178,3 @@ jobs:
             --connect-timeout 5 \
             --max-attempts 1 \
             --overall-timeout 30
-
-  # ---------------------------------------------------------------
-  # VEXXHOST CIDR report (informational)
-  # ---------------------------------------------------------------
-  vexxhost-cidr-report:
-    name: "VEXXHOST CIDR variable report"
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    timeout-minutes: 5
-    needs: [positive-connection-tests, negative-connection-tests]
-    steps:
-      # yamllint disable-line rule:line-length
-      - uses: step-security/harden-runner@6c3c2f2c1c457b00c10c4848d6f5491db3b629df # v2.18.0
-        with:
-          egress-policy: audit
-
-      - name: "Summarise VEXXHOST CIDR blocks"
-        shell: bash
-        env:
-          VEXXHOST_CIDR_BLOCKS: ${{ vars.VEXXHOST_CIDR_BLOCKS }}
-        run: |
-          set -u
-          summary="$GITHUB_STEP_SUMMARY"
-          {
-            echo "## 🌐 VEXXHOST CIDR Blocks"
-            echo ""
-            echo "Raw CIDR list supplied via the \`VEXXHOST_CIDR_BLOCKS\`"
-            echo "repository/org variable. This is informational: "
-            echo "harden-runner's \`allowed-endpoints\` is DNS-based and"
-            echo "does not accept CIDRs directly."
-            echo ""
-            echo '```text'
-            printf '%s\n' "${VEXXHOST_CIDR_BLOCKS:-<unset>}"
-            echo '```'
-          } >> "$summary"
