@@ -5,34 +5,39 @@
 # Connection allowlist validation workflow
 #
 # This workflow exercises the allowlist produced for lfreleng-actions
-# (from `lfreleng-actions/allowlist.*`) against a locked-down
-# harden-runner configuration. It verifies that:
+# against a locked-down harden-runner configuration. It verifies that:
 #
-#   * five endpoints that should be permitted are reachable, and
-#   * five endpoints that should be blocked are NOT reachable.
+#   * every endpoint listed in `vars.TEST_PERMITTED` is reachable, and
+#   * every endpoint listed in `vars.TEST_DENIED` is blocked.
 #
-# The allowlist is sourced from repository/org variables so that
-# downstream workflows can reference a single variable instead of
-# inlining large boilerplate lists.
+# The heavy lifting happens in `scripts/connection_test.py`, an
+# asyncio-based probe harness that:
+#
+#   * runs all probes in parallel with a hard wall-clock cap,
+#   * cancels immediately on SIGTERM/SIGINT (step cancellation works), and
+#   * derives expected pass/fail counts from the input line count, so the
+#     variables are freely extensible without editing the workflow.
 #
 # Expected variables (configure at repo or org level):
 #
 #   CONNECTION_WHITELIST
-#     `host:port` entries separated by newlines OR spaces. A
-#     `prepare` job below normalises the value so that downstream
-#     consumers do not need to worry about how it was stored (the
-#     harden-runner action's `allowed-endpoints` input is a single
-#     whitespace-separated string; pasting a multi-line variable
-#     directly can cause only the first line to be honoured).
-#     Populate from `lfreleng-actions/allowlist.md`.
+#     `host:port` entries separated by newlines OR spaces. The
+#     `prepare` job normalises the value; harden-runner's
+#     `allowed-endpoints` input expects a single whitespace-separated
+#     string, and pasting a multi-line variable directly causes only
+#     the first line to be honoured.
+#
+#   TEST_PERMITTED
+#     One `host:port` entry per line. MUST be a subset of
+#     `CONNECTION_WHITELIST`; each entry is expected to connect.
+#
+#   TEST_DENIED
+#     One `host:port` entry per line. MUST NOT appear in
+#     `CONNECTION_WHITELIST`; each entry is expected to be blocked.
 #
 #   VEXXHOST_CIDR_BLOCKS
 #     Newline-separated IPv4/IPv6 CIDR blocks for AS33028 (VEXXHOST).
-#     Populate from `resources/VEXXHOST.txt`. NOTE: harden-runner does
-#     not accept raw CIDRs in `allowed-endpoints` (it is DNS-based);
-#     this variable is consumed for reporting and for non-harden-runner
-#     egress controls (e.g. iptables on self-hosted runners or the
-#     StepSecurity Policy Store).
+#     Informational only; harden-runner does not consume CIDRs.
 
 name: "Test Connection Allowlist 🧪"
 
@@ -53,13 +58,6 @@ permissions: {}
 jobs:
   # ---------------------------------------------------------------
   # Normalise the CONNECTION_WHITELIST variable
-  #
-  # harden-runner expects `allowed-endpoints` as a single
-  # whitespace-separated string. Variables stored with newlines as
-  # separators only contribute their first line when substituted
-  # directly into the input. This job collapses any whitespace
-  # (including newlines) into single spaces and exposes the result
-  # as a job output that downstream jobs can reference.
   # ---------------------------------------------------------------
   prepare:
     name: "Normalise allowlist"
@@ -91,11 +89,10 @@ jobs:
           # Collapse all whitespace (newlines, tabs, multiple spaces)
           # into single spaces and strip leading/trailing whitespace.
           normalised="$(printf '%s' "$RAW_WHITELIST" \
-            | tr '\n\t' '  ' \
+            | tr '\r\n\t' '   ' \
             | tr -s ' ' \
             | sed 's/^ //; s/ $//')"
 
-          # Count entries for reporting.
           count="$(printf '%s' "$normalised" | tr ' ' '\n' \
             | grep -c . || true)"
 
@@ -109,24 +106,20 @@ jobs:
             echo ""
             echo "- Normalised **${count}** \`host:port\` entries from"
             echo "  \`vars.CONNECTION_WHITELIST\`."
-            echo "- Output is a single whitespace-separated string"
-            echo "  suitable for harden-runner's \`allowed-endpoints\`."
           } >> "$GITHUB_STEP_SUMMARY"
 
   # ---------------------------------------------------------------
   # Positive test: whitelisted endpoints MUST be reachable
   # ---------------------------------------------------------------
   positive-connection-tests:
-    name: "Test ALLOWED Connections"
+    name: "Test PERMITTED Connections"
     runs-on: ubuntu-latest
     needs: prepare
     permissions:
       contents: read
-    # Worst case: 3 attempts x 10s per endpoint (serial per target,
-    # parallel across targets) = ~30s probe wall time, plus
-    # harden-runner agent install/teardown. Realistic ceiling ~2
-    # minutes; add a two minute buffer.
-    timeout-minutes: 5
+    # Script has its own 60s overall cap; 3 min is generous headroom
+    # for the harden-runner agent install and repo checkout.
+    timeout-minutes: 3
     steps:
       # yamllint disable-line rule:line-length
       - uses: step-security/harden-runner@6c3c2f2c1c457b00c10c4848d6f5491db3b629df # v2.18.0
@@ -135,102 +128,20 @@ jobs:
           disable-sudo: true
           allowed-endpoints: ${{ needs.prepare.outputs.whitelist }}
 
-      - name: "Run positive connection tests"
+      # yamllint disable-line rule:line-length
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+
+      - name: "Run permitted connection tests"
         shell: bash
         env:
-          # Five endpoints that must be present in CONNECTION_WHITELIST.
-          # Tests run in parallel; each endpoint gets up to 3 attempts
-          # with a 10 second timeout per attempt so transient network
-          # conditions outside of the runner do not produce flakes.
-          POSITIVE_TARGETS: |
-            api.github.com:443
-            pypi.org:443
-            files.pythonhosted.org:443
-            ghcr.io:443
-            raw.githubusercontent.com:443
-          CONNECT_TIMEOUT: "10"
-          MAX_ATTEMPTS: "3"
+          TEST_PERMITTED: ${{ vars.TEST_PERMITTED }}
         run: |
-          set -u
-          # Ensure background probes die immediately if the step is
-          # cancelled or exits for any reason. `kill 0` signals every
-          # process in the current process group, reaping all probes
-          # and their `timeout`/bash descendants in one go.
-          trap 'trap - TERM INT EXIT; kill 0 2>/dev/null || true' \
-            TERM INT EXIT
-          summary="$GITHUB_STEP_SUMMARY"
-          results_dir="$(mktemp -d)"
-
-          probe() {
-            local target="$1"
-            local host="${target%:*}"
-            local port="${target##*:}"
-            local attempt=1
-            local status="fail"
-            local attempts_taken=0
-            while [ "$attempt" -le "$MAX_ATTEMPTS" ]; do
-              attempts_taken="$attempt"
-              if timeout "$CONNECT_TIMEOUT" \
-                bash -c "</dev/tcp/${host}/${port}" 2>/dev/null; then
-                status="ok"
-                break
-              fi
-              attempt=$((attempt + 1))
-            done
-            # Result file: <status>|<attempts>|<target>
-            printf '%s|%d|%s\n' \
-              "$status" "$attempts_taken" "$target" \
-              > "${results_dir}/$$.$(echo "$target" | tr ':/' '__').out"
-          }
-
-          # Launch all probes in parallel.
-          pids=()
-          while IFS= read -r target; do
-            [ -z "$target" ] && continue
-            probe "$target" &
-            pids+=("$!")
-          done <<< "$POSITIVE_TARGETS"
-          for pid in "${pids[@]}"; do
-            wait "$pid" || true
-          done
-
-          {
-            echo "## ✅ Test PERMITTED Connections"
-            echo ""
-            echo "Endpoints expected to be **permitted** by harden-runner"
-            echo "(\`egress-policy: block\` with \`CONNECTION_WHITELIST\`)."
-            echo "Probes run in parallel with up to ${MAX_ATTEMPTS} "
-            echo "attempts each and a ${CONNECT_TIMEOUT}s per-attempt "
-            echo "timeout."
-            echo ""
-            echo "| Endpoint | Expected | Attempts | Result |"
-            echo "| -------- | -------- | -------- | ------ |"
-          } >> "$summary"
-
-          failures=0
-          # Sort by target for stable report ordering.
-          for f in "${results_dir}"/*.out; do
-            [ -e "$f" ] || continue
-            IFS='|' read -r status attempts target < "$f"
-            if [ "$status" = "ok" ]; then
-              result="✅ connected"
-            else
-              result="❌ FAILED"
-              failures=$((failures + 1))
-            fi
-            echo "| \`${target}\` | allowed | ${attempts} | ${result} |" \
-              >> "$summary"
-          done
-
-          {
-            echo ""
-            echo "**Failures:** ${failures} / 5"
-          } >> "$summary"
-
-          if [ "$failures" -ne 0 ]; then
-            echo "::error::${failures} allowed endpoint(s) were blocked"
-            exit 1
-          fi
+          python3 scripts/connection_test.py \
+            --mode permitted \
+            --targets-env TEST_PERMITTED \
+            --connect-timeout 5 \
+            --max-attempts 3 \
+            --overall-timeout 60
 
   # ---------------------------------------------------------------
   # Negative test: non-whitelisted endpoints MUST be blocked
@@ -241,10 +152,7 @@ jobs:
     needs: prepare
     permissions:
       contents: read
-    # Worst case: 1 attempt x 10s per endpoint (parallel) = ~10s
-    # probe wall time, plus harden-runner agent install/teardown.
-    # Realistic ceiling ~90s; add a two minute buffer.
-    timeout-minutes: 4
+    timeout-minutes: 3
     steps:
       # yamllint disable-line rule:line-length
       - uses: step-security/harden-runner@6c3c2f2c1c457b00c10c4848d6f5491db3b629df # v2.18.0
@@ -253,89 +161,20 @@ jobs:
           disable-sudo: true
           allowed-endpoints: ${{ needs.prepare.outputs.whitelist }}
 
-      - name: "Run negative connection tests"
+      # yamllint disable-line rule:line-length
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+
+      - name: "Run denied connection tests"
         shell: bash
         env:
-          # Five endpoints that must NOT appear in CONNECTION_WHITELIST.
-          # Tests run in parallel. Failure (i.e. a successful connection)
-          # is immediate and final: no retries, because a blocked
-          # endpoint should never connect on any attempt.
-          NEGATIVE_TARGETS: |
-            www.example.org:443
-            www.wikipedia.org:443
-            www.cloudflare.com:443
-            www.bbc.co.uk:443
-            www.amazon.com:443
-          CONNECT_TIMEOUT: "10"
+          TEST_DENIED: ${{ vars.TEST_DENIED }}
         run: |
-          set -u
-          # Ensure background probes die immediately if the step is
-          # cancelled or exits for any reason. `kill 0` signals every
-          # process in the current process group, reaping all probes
-          # and their `timeout`/bash descendants in one go.
-          trap 'trap - TERM INT EXIT; kill 0 2>/dev/null || true' \
-            TERM INT EXIT
-          summary="$GITHUB_STEP_SUMMARY"
-          results_dir="$(mktemp -d)"
-
-          probe() {
-            local target="$1"
-            local host="${target%:*}"
-            local port="${target##*:}"
-            local status="blocked"
-            if timeout "$CONNECT_TIMEOUT" \
-              bash -c "</dev/tcp/${host}/${port}" 2>/dev/null; then
-              status="leaked"
-            fi
-            printf '%s|%s\n' "$status" "$target" \
-              > "${results_dir}/$$.$(echo "$target" | tr ':/' '__').out"
-          }
-
-          # Launch all probes in parallel (single attempt each).
-          pids=()
-          while IFS= read -r target; do
-            [ -z "$target" ] && continue
-            probe "$target" &
-            pids+=("$!")
-          done <<< "$NEGATIVE_TARGETS"
-          for pid in "${pids[@]}"; do
-            wait "$pid" || true
-          done
-
-          {
-            echo "## 🚫 Test DENIED Connections"
-            echo ""
-            echo "Endpoints expected to be **blocked** by harden-runner"
-            echo "(not present in \`CONNECTION_WHITELIST\`). Probes run"
-            echo "in parallel with a single ${CONNECT_TIMEOUT}s attempt "
-            echo "each; denial should be immediate."
-            echo ""
-            echo "| Endpoint | Expected | Result |"
-            echo "| -------- | -------- | ------ |"
-          } >> "$summary"
-
-          failures=0
-          for f in "${results_dir}"/*.out; do
-            [ -e "$f" ] || continue
-            IFS='|' read -r status target < "$f"
-            if [ "$status" = "leaked" ]; then
-              result="❌ LEAKED (connected)"
-              failures=$((failures + 1))
-            else
-              result="✅ blocked"
-            fi
-            echo "| \`${target}\` | blocked | ${result} |" >> "$summary"
-          done
-
-          {
-            echo ""
-            echo "**Leaks:** ${failures} / 5"
-          } >> "$summary"
-
-          if [ "$failures" -ne 0 ]; then
-            echo "::error::${failures} endpoint(s) reached; not allowlisted"
-            exit 1
-          fi
+          python3 scripts/connection_test.py \
+            --mode denied \
+            --targets-env TEST_DENIED \
+            --connect-timeout 5 \
+            --max-attempts 1 \
+            --overall-timeout 30
 
   # ---------------------------------------------------------------
   # VEXXHOST CIDR report (informational)
@@ -366,9 +205,7 @@ jobs:
             echo "Raw CIDR list supplied via the \`VEXXHOST_CIDR_BLOCKS\`"
             echo "repository/org variable. This is informational: "
             echo "harden-runner's \`allowed-endpoints\` is DNS-based and"
-            echo "does not accept CIDRs directly. Use this list with"
-            echo "iptables, self-hosted runner firewalls, or the"
-            echo "StepSecurity Policy Store."
+            echo "does not accept CIDRs directly."
             echo ""
             echo '```text'
             printf '%s\n' "${VEXXHOST_CIDR_BLOCKS:-<unset>}"
