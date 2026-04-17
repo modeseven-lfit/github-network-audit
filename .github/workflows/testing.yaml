@@ -122,7 +122,11 @@ jobs:
     needs: prepare
     permissions:
       contents: read
-    timeout-minutes: 10
+    # Worst case: 3 attempts x 10s per endpoint (serial per target,
+    # parallel across targets) = ~30s probe wall time, plus
+    # harden-runner agent install/teardown. Realistic ceiling ~2
+    # minutes; add a two minute buffer.
+    timeout-minutes: 5
     steps:
       # yamllint disable-line rule:line-length
       - uses: step-security/harden-runner@6c3c2f2c1c457b00c10c4848d6f5491db3b629df # v2.18.0
@@ -237,7 +241,10 @@ jobs:
     needs: prepare
     permissions:
       contents: read
-    timeout-minutes: 10
+    # Worst case: 1 attempt x 10s per endpoint (parallel) = ~10s
+    # probe wall time, plus harden-runner agent install/teardown.
+    # Realistic ceiling ~90s; add a two minute buffer.
+    timeout-minutes: 4
     steps:
       # yamllint disable-line rule:line-length
       - uses: step-security/harden-runner@6c3c2f2c1c457b00c10c4848d6f5491db3b629df # v2.18.0
