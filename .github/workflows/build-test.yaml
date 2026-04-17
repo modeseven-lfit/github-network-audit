@@ -1,0 +1,192 @@
+---
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 The Linux Foundation
+
+# Runs on a new pull request, performs build and runs tests
+name: 'Python Build/Test'
+
+# yamllint disable-line rule:truthy
+on:
+  workflow_dispatch:
+    inputs:
+      clear_cache:
+        description: 'Clear all Python dependency caches'
+        type: boolean
+        default: false
+        required: false
+  pull_request:
+    types: [opened, reopened, synchronize]
+    branches:
+      - main
+      - master
+    paths:
+      - '**'
+      - '!.github/**'
+      - '!.*'
+      - '!tox.ini'
+
+concurrency:
+  group: "${{ github.workflow }}-${{ github.ref }}"
+  cancel-in-progress: true
+
+permissions: {}
+
+jobs:
+  repository-metadata:
+    name: "Repository Metadata"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    timeout-minutes: 5
+    steps:
+      # yamllint disable-line rule:line-length
+      - uses: step-security/harden-runner@f808768d1510423e83855289c910610ca9b43176  # v2.17.0
+        with:
+          egress-policy: audit
+
+      # yamllint disable-line rule:line-length
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: "Gather repository metadata"
+        id: repo-metadata
+        # yamllint disable-line rule:line-length
+        uses: lfreleng-actions/repository-metadata-action@ceabcd987d13d7bfefd2372e01eebb0ddac45956  # v0.2.0
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          github_summary: 'true'
+          gerrit_summary: 'false'
+          artifact_upload: 'true'
+          artifact_formats: 'json'
+
+  clear-cache:
+    name: 'Clear Python Caches'
+    # Only runs on manual dispatch with clear_cache enabled
+    if: >-
+      github.event_name == 'workflow_dispatch'
+      && github.event.inputs.clear_cache == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write  # Required for gh cache delete
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
+    steps:
+      # yamllint disable-line rule:line-length
+      - uses: step-security/harden-runner@f808768d1510423e83855289c910610ca9b43176  # v2.17.0
+        with:
+          egress-policy: 'audit'
+
+      - name: 'Clear Python dependency caches'
+        env:
+          REPO: "${{ github.repository }}"
+        run: |
+          # Clear Python dependency caches
+          echo "Clearing Python dependency caches"
+          deleted=0
+          for prefix in python- setup-python- setup-uv-; do
+            while true; do
+              if ! keys=$(gh cache list --repo "$REPO" \
+                --key "$prefix" --limit 100 \
+                --json key --jq '.[].key' 2>&1); then
+                echo "::warning::Failed to list caches" \
+                  "for prefix '$prefix': $keys"
+                break
+              fi
+              [ -n "$keys" ] || break
+              batch_deleted=0
+              while IFS= read -r key; do
+                [ -n "$key" ] || continue
+                if gh cache delete "$key" \
+                  --repo "$REPO" 2>&1; then
+                  echo "Deleted cache: $key"
+                  deleted=$((deleted + 1))
+                  batch_deleted=$((batch_deleted + 1))
+                fi
+              done <<< "$keys"
+              [ "$batch_deleted" -gt 0 ] || break
+            done
+          done
+          echo "Cleared $deleted Python cache(s)" \
+            >> "$GITHUB_STEP_SUMMARY"
+
+  python-build:
+    name: 'Python Build'
+    needs: 'clear-cache'
+    if: ${{ always() && !cancelled() }}
+    runs-on: 'ubuntu-latest'
+    outputs:
+      matrix_json: "${{ steps.python-build.outputs.matrix_json }}"
+      artefact_name: "${{ steps.python-build.outputs.artefact_name }}"
+      artefact_path: "${{ steps.python-build.outputs.artefact_path }}"
+    permissions:
+      contents: read
+    timeout-minutes: 12
+    steps:
+      # yamllint disable-line rule:line-length
+      - uses: step-security/harden-runner@f808768d1510423e83855289c910610ca9b43176  # v2.17.0
+        with:
+          egress-policy: 'audit'
+
+      # yamllint disable-line rule:line-length
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+
+      - name: 'Build Python project'
+        id: python-build
+        # yamllint disable-line rule:line-length
+        uses: lfreleng-actions/python-build-action@38b9a4e7ee34e56d178f5bd248df52e41f7d496e  # v1.0.6
+
+  python-tests:
+    name: 'Python Tests'
+    runs-on: 'ubuntu-latest'
+    needs: 'python-build'
+    if: ${{ !cancelled() && needs.python-build.result == 'success' }}
+    strategy:
+      fail-fast: false
+      matrix: "${{ fromJson(needs.python-build.outputs.matrix_json) }}"
+    permissions:
+      contents: read
+    timeout-minutes: 12
+    steps:
+      # yamllint disable-line rule:line-length
+      - uses: step-security/harden-runner@f808768d1510423e83855289c910610ca9b43176  # v2.17.0
+        with:
+          egress-policy: audit
+
+      # yamllint disable-line rule:line-length
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+
+      - name: "Python tests [pytest] ${{ matrix.python-version }}"
+        # yamllint disable-line rule:line-length
+        uses: lfreleng-actions/python-test-action@82aa55cf21a6be32d8d5b365716b2b349e8058bd  # v1.0.2
+        with:
+          python_version: ${{ matrix.python-version }}
+
+  python-audit:
+    name: 'Python Audit'
+    runs-on: 'ubuntu-latest'
+    needs: 'python-build'
+    if: ${{ !cancelled() && needs.python-build.result == 'success' }}
+    strategy:
+      fail-fast: false
+      matrix: "${{ fromJson(needs.python-build.outputs.matrix_json) }}"
+    permissions:
+      contents: read
+    timeout-minutes: 10
+    steps:
+      # yamllint disable-line rule:line-length
+      - uses: step-security/harden-runner@f808768d1510423e83855289c910610ca9b43176  # v2.17.0
+        with:
+          egress-policy: 'audit'
+
+      # yamllint disable-line rule:line-length
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+
+      - name: "Audit dependencies ${{ matrix.python-version }}"
+        # yamllint disable-line rule:line-length
+        uses: lfreleng-actions/python-audit-action@1776538e768c52c55c3c96495f6e25f0762ad28f  # v0.2.6
+        with:
+          python_version: "${{ matrix.python-version }}"
+          permit_fail: "${{ vars.NO_BLOCK_AUDIT_FAIL == 'true' }}"
