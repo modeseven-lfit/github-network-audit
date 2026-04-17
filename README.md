@@ -77,3 +77,16 @@ The tool caches all data locally for idempotent operation.
 
 All intermediate data persists on disk. Follow-up runs use cached data
 by default. Use `--refresh` to force re-fetching from APIs.
+
+## VEXXHOST Infrastructure
+
+The Linux Foundation uses [VEXXHOST](https://vexxhost.com/) for some
+infrastructure needs, running servers and software in their data centres.
+Projects whose GitHub Actions workflows may need to reach other Linux
+Foundation hosted services should include the IPv4 and IPv6 CIDR blocks
+listed in [`resources/VEXXHOST.txt`](resources/VEXXHOST.txt) in their
+outbound allowlists to avoid blocking legitimate traffic. Because provider
+allocations can change over time, verify or refresh these ranges
+against VEXXHOST's current published network information (see the
+source URL in the resource file) when troubleshooting blocked
+egress.
