@@ -148,6 +148,12 @@ jobs:
           MAX_ATTEMPTS: "3"
         run: |
           set -u
+          # Ensure background probes die immediately if the step is
+          # cancelled or exits for any reason. `kill 0` signals every
+          # process in the current process group, reaping all probes
+          # and their `timeout`/bash descendants in one go.
+          trap 'trap - TERM INT EXIT; kill 0 2>/dev/null || true' \
+            TERM INT EXIT
           summary="$GITHUB_STEP_SUMMARY"
           results_dir="$(mktemp -d)"
 
@@ -256,6 +262,12 @@ jobs:
           CONNECT_TIMEOUT: "10"
         run: |
           set -u
+          # Ensure background probes die immediately if the step is
+          # cancelled or exits for any reason. `kill 0` signals every
+          # process in the current process group, reaping all probes
+          # and their `timeout`/bash descendants in one go.
+          trap 'trap - TERM INT EXIT; kill 0 2>/dev/null || true' \
+            TERM INT EXIT
           summary="$GITHUB_STEP_SUMMARY"
           results_dir="$(mktemp -d)"
 
