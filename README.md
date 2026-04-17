@@ -1,15 +1,17 @@
 <!--
 # SPDX-License-Identifier: Apache-2.0
-# SPDX-FileCopyrightText: 2025 The Linux Foundation
+# SPDX-FileCopyrightText: 2026 The Linux Foundation
 -->
 
 # GitHub Network Audit
 
-Audit outbound network connections from GitHub Actions workflow runs
-that use [step-security/harden-runner](https://github.com/step-security/harden-runner).
+Collect outbound network connection data from GitHub Actions workflow
+runs that use
+[step-security/harden-runner](https://github.com/step-security/harden-runner).
 
-Collects network endpoint data from the StepSecurity API and generates
-consolidated allowlists for use with harden-runner's `egress-policy: block` mode.
+This tool gathers network endpoint data from the StepSecurity API and
+builds consolidated allowlists for use with harden-runner's
+`egress-policy: block` mode.
 
 ## Installation
 
@@ -54,7 +56,7 @@ github-network-audit report --org lfreleng-actions --repo path-check-action
 
 ## Output
 
-Reports are generated in the `{org}/` directory:
+The tool writes reports to the `{org}/` directory:
 
 - `allowlist.json` - Full allowlist with metadata
 - `allowlist.csv` - Spreadsheet-friendly format
@@ -65,9 +67,9 @@ Reports are generated in the `{org}/` directory:
 - **GitHub GraphQL API** - Repository enumeration (single query)
 - **StepSecurity API** - Network endpoint data (unauthenticated)
 
-All data is cached locally for idempotent operation.
+The tool caches all data locally for idempotent operation.
 
 ## Notes
 
-The tool caches all intermediate data on disk. Subsequent runs use
-cached data by default. Use `--refresh` to force re-fetching from APIs.
+All intermediate data persists on disk. Follow-up runs use cached data
+by default. Use `--refresh` to force re-fetching from APIs.

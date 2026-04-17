@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# SPDX-FileCopyrightText: 2025 The Linux Foundation
+# SPDX-FileCopyrightText: 2026 The Linux Foundation
 
 """Data collection from GitHub GraphQL and StepSecurity APIs."""
 
@@ -64,7 +64,8 @@ class NetworkAuditCollector:
         """
         path = self._cache_path(*parts)
         if path.exists():
-            return json.loads(path.read_text(encoding="utf-8"))
+            result: dict | list = json.loads(path.read_text(encoding="utf-8"))
+            return result
         return None
 
     def _write_cache(self, data: dict | list, *parts: str) -> Path:
@@ -149,7 +150,10 @@ class NetworkAuditCollector:
         return all_repos
 
     def fetch_repo_runs(
-        self, repo: str, *, refresh: bool = False,
+        self,
+        repo: str,
+        *,
+        refresh: bool = False,
     ) -> list[dict]:
         """Fetch all workflow runs for a repo from StepSecurity.
 
@@ -165,7 +169,8 @@ class NetworkAuditCollector:
             if cached is not None:
                 logger.info(
                     "Using cached runs for %s (%d runs)",
-                    repo, len(cached),
+                    repo,
+                    len(cached),
                 )
                 return cached  # type: ignore[return-value]
 
@@ -174,42 +179,44 @@ class NetworkAuditCollector:
         page = 1
 
         while True:
-            url = (
-                f"{STEPSECURITY_API}/github/{self.org}/"
-                f"{repo}/actions/runs?page={page}"
-            )
+            url = f"{STEPSECURITY_API}/github/{self.org}/{repo}/actions/runs?page={page}"
             try:
                 resp = self.session.get(url, timeout=30)
             except requests.RequestException:
                 logger.warning(
-                    "Request failed for %s page %d", repo, page,
+                    "Request failed for %s page %d",
+                    repo,
+                    page,
                 )
                 break
 
             if resp.status_code == 404:
                 logger.info(
                     "No StepSecurity data for %s/%s",
-                    self.org, repo,
+                    self.org,
+                    repo,
                 )
                 break
 
             if resp.status_code != 200:
                 logger.warning(
                     "HTTP %d for %s/%s page %d",
-                    resp.status_code, self.org, repo, page,
+                    resp.status_code,
+                    self.org,
+                    repo,
+                    page,
                 )
                 break
 
             data = resp.json()
             runs = data.get("workflow_runs", [])
 
-            new_runs = [
-                r for r in runs if r["id"] not in seen_ids
-            ]
+            new_runs = [r for r in runs if r["id"] not in seen_ids]
             if not new_runs:
                 logger.debug(
                     "%s: page %d has only duplicates",
-                    repo, page,
+                    repo,
+                    page,
                 )
                 break
 
@@ -220,8 +227,11 @@ class NetworkAuditCollector:
             total_pages = data.get("total_pages", 1)
             logger.debug(
                 "%s: page %d/%d (%d new, %d total)",
-                repo, page, total_pages,
-                len(new_runs), len(all_runs),
+                repo,
+                page,
+                total_pages,
+                len(new_runs),
+                len(all_runs),
             )
 
             if page >= total_pages:
@@ -231,13 +241,19 @@ class NetworkAuditCollector:
 
         logger.info(
             "Fetched %d unique runs for %s/%s",
-            len(all_runs), self.org, repo,
+            len(all_runs),
+            self.org,
+            repo,
         )
         self._write_cache(all_runs, repo, "runs.json")
         return all_runs
 
     def fetch_run_detail(
-        self, repo: str, run_id: str, *, refresh: bool = False,
+        self,
+        repo: str,
+        run_id: str,
+        *,
+        refresh: bool = False,
     ) -> dict | None:
         """Fetch detailed run data from StepSecurity.
 
@@ -256,26 +272,27 @@ class NetworkAuditCollector:
             if cached is not None:
                 return cached  # type: ignore[return-value]
 
-        url = (
-            f"{STEPSECURITY_API}/github/{self.org}/"
-            f"{repo}/actions/runs/{run_id}"
-        )
+        url = f"{STEPSECURITY_API}/github/{self.org}/{repo}/actions/runs/{run_id}"
         try:
             resp = self.session.get(url, timeout=30)
         except requests.RequestException:
             logger.warning(
-                "Request failed for run %s in %s", run_id, repo,
+                "Request failed for run %s in %s",
+                run_id,
+                repo,
             )
             return None
 
         if resp.status_code != 200:
             logger.warning(
                 "HTTP %d for run %s in %s",
-                resp.status_code, run_id, repo,
+                resp.status_code,
+                run_id,
+                repo,
             )
             return None
 
-        data = resp.json()
+        data: dict = resp.json()
         self._write_cache(data, *cache_parts)
         time.sleep(0.2)
         return data

@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# SPDX-FileCopyrightText: 2025 The Linux Foundation
+# SPDX-FileCopyrightText: 2026 The Linux Foundation
 
 """Report generation from cached network audit data."""
 
@@ -40,19 +40,21 @@ def extract_endpoints_from_run(run_detail: dict) -> list[dict]:
                 process = tool.get("name", "")
 
                 for ep in tool.get("endpoints", []):
-                    endpoints.append({
-                        "domain": ep.get("domainName", ""),
-                        "port": ep.get("port", ""),
-                        "friendly_name": ep.get("friendlyName", ""),
-                        "process": process,
-                        "step": step_name,
-                        "action": action,
-                        "job": job_name,
-                        "repo": repo,
-                        "workflow": workflow,
-                        "run_id": run_id,
-                        "egress_policy": egress_policy,
-                    })
+                    endpoints.append(
+                        {
+                            "domain": ep.get("domainName", ""),
+                            "port": ep.get("port", ""),
+                            "friendly_name": ep.get("friendlyName", ""),
+                            "process": process,
+                            "step": step_name,
+                            "action": action,
+                            "job": job_name,
+                            "repo": repo,
+                            "workflow": workflow,
+                            "run_id": run_id,
+                            "egress_policy": egress_policy,
+                        }
+                    )
 
     return endpoints
 
@@ -71,7 +73,8 @@ class NetworkAuditReporter:
         self.base_dir = output_dir / org
 
     def _collect_all_endpoints(
-        self, repo_filter: str | None = None,
+        self,
+        repo_filter: str | None = None,
     ) -> list[dict]:
         """Extract endpoints from all cached run detail files.
 
@@ -108,13 +111,16 @@ class NetworkAuditReporter:
                     )
                 except (json.JSONDecodeError, KeyError) as exc:
                     logger.warning(
-                        "Error parsing %s: %s", run_file, exc,
+                        "Error parsing %s: %s",
+                        run_file,
+                        exc,
                     )
 
         return endpoints
 
     def _build_allowlist(
-        self, endpoints: list[dict],
+        self,
+        endpoints: list[dict],
     ) -> list[dict]:
         """Build a deduplicated allowlist from raw endpoints.
 
@@ -153,19 +159,22 @@ class NetworkAuditReporter:
 
         result = []
         for entry in sorted(
-            seen.values(), key=lambda x: x["domain"],
+            seen.values(),
+            key=lambda x: x["domain"],
         ):
-            result.append({
-                "domain": entry["domain"],
-                "port": entry["port"],
-                "endpoint": f"{entry['domain']}:{entry['port']}",
-                "friendly_name": entry["friendly_name"],
-                "processes": sorted(entry["processes"]),
-                "repos": sorted(entry["repos"]),
-                "repo_count": len(entry["repos"]),
-                "workflows": sorted(entry["workflows"]),
-                "actions": sorted(entry["actions"]),
-            })
+            result.append(
+                {
+                    "domain": entry["domain"],
+                    "port": entry["port"],
+                    "endpoint": f"{entry['domain']}:{entry['port']}",
+                    "friendly_name": entry["friendly_name"],
+                    "processes": sorted(entry["processes"]),
+                    "repos": sorted(entry["repos"]),
+                    "repo_count": len(entry["repos"]),
+                    "workflows": sorted(entry["workflows"]),
+                    "actions": sorted(entry["actions"]),
+                }
+            )
 
         return result
 
@@ -220,7 +229,9 @@ class NetworkAuditReporter:
         logger.info("Wrote CSV report: %s", path)
 
     def _write_markdown(
-        self, allowlist: list[dict], path: Path,
+        self,
+        allowlist: list[dict],
+        path: Path,
     ) -> None:
         """Write allowlist as Markdown with harden-runner config.
 
@@ -231,10 +242,12 @@ class NetworkAuditReporter:
         path.parent.mkdir(parents=True, exist_ok=True)
         lines: list[str] = [
             "<!--",
+            # REUSE-IgnoreStart
             "# SPDX-License-Identifier: Apache-2.0",
-            "# SPDX-FileCopyrightText: 2025 The Linux Foundation",
+            "# SPDX-FileCopyrightText: 2026 The Linux Foundation",
             "-->",
             "",
+            # REUSE-IgnoreEnd
             f"# Network Allowlist: {self.org}",
             "",
             f"Total unique endpoints: **{len(allowlist)}**",
@@ -260,20 +273,11 @@ class NetworkAuditReporter:
 
         lines.append("## Endpoint Details")
         lines.append("")
-        lines.append(
-            "| Endpoint | Name | Processes | Repos |"
-        )
-        lines.append(
-            "| -------- | ---- | --------- | ----- |"
-        )
+        lines.append("| Endpoint | Name | Processes | Repos |")
+        lines.append("| -------- | ---- | --------- | ----- |")
         for entry in allowlist:
             procs = ", ".join(entry["processes"])
-            lines.append(
-                f"| `{entry['endpoint']}` "
-                f"| {entry['friendly_name']} "
-                f"| {procs} "
-                f"| {entry['repo_count']} |"
-            )
+            lines.append(f"| `{entry['endpoint']}` | {entry['friendly_name']} | {procs} | {entry['repo_count']} |")
         lines.append("")
 
         lines.append("## Per-Repository Breakdown")
@@ -291,9 +295,7 @@ class NetworkAuditReporter:
             lines.append("")
             for entry in repo_endpoints[repo_name]:
                 procs = ", ".join(entry["processes"])
-                lines.append(
-                    f"- `{entry['endpoint']}` ({procs})"
-                )
+                lines.append(f"- `{entry['endpoint']}` ({procs})")
             lines.append("")
 
         lines.append("")
@@ -318,7 +320,8 @@ class NetworkAuditReporter:
             repo_filter=repo_filter,
         )
         logger.info(
-            "Extracted %d endpoint records", len(all_endpoints),
+            "Extracted %d endpoint records",
+            len(all_endpoints),
         )
 
         allowlist = self._build_allowlist(all_endpoints)

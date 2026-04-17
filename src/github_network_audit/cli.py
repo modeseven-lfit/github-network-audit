@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# SPDX-FileCopyrightText: 2025 The Linux Foundation
+# SPDX-FileCopyrightText: 2026 The Linux Foundation
 
 """CLI interface for GitHub Network Audit."""
 
@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Optional
 
 import typer
 from rich.console import Console
@@ -28,7 +27,7 @@ def collect(
         "lfreleng-actions",
         help="GitHub organization to audit.",
     ),
-    repo: Optional[str] = typer.Option(
+    repo: str | None = typer.Option(
         None,
         help="Specific repository to audit.",
     ),
@@ -40,13 +39,15 @@ def collect(
         False,
         help="Force refresh of cached data.",
     ),
-    github_token: Optional[str] = typer.Option(
+    github_token: str | None = typer.Option(
         None,
         envvar="GITHUB_TOKEN",
         help="GitHub API token for GraphQL queries.",
     ),
     verbose: bool = typer.Option(
-        False, "--verbose", "-v",
+        False,
+        "--verbose",
+        "-v",
         help="Enable verbose logging output.",
     ),
 ) -> None:
@@ -83,13 +84,12 @@ def collect(
         )
 
         runs = collector.fetch_repo_runs(
-            repo_name, refresh=refresh,
+            repo_name,
+            refresh=refresh,
         )
         console.print(f"  Total runs tracked: {len(runs)}")
 
-        detail_runs = [
-            r for r in runs if r.get("destination_count", 0) > 0
-        ]
+        detail_runs = [r for r in runs if r.get("destination_count", 0) > 0]
         console.print(
             f"  Runs with network data: {len(detail_runs)}",
         )
@@ -97,7 +97,9 @@ def collect(
         for i, run in enumerate(detail_runs):
             run_id = run["id"]
             collector.fetch_run_detail(
-                repo_name, run_id, refresh=refresh,
+                repo_name,
+                run_id,
+                refresh=refresh,
             )
             if (i + 1) % 10 == 0 or (i + 1) == len(detail_runs):
                 console.print(
@@ -128,12 +130,14 @@ def report(
         "all",
         help="Output format: md, csv, json, or all.",
     ),
-    repo: Optional[str] = typer.Option(
+    repo: str | None = typer.Option(
         None,
         help="Report for specific repo only.",
     ),
     verbose: bool = typer.Option(
-        False, "--verbose", "-v",
+        False,
+        "--verbose",
+        "-v",
         help="Enable verbose logging output.",
     ),
 ) -> None:
@@ -144,14 +148,16 @@ def report(
     )
 
     reporter = NetworkAuditReporter(
-        org=org, output_dir=output_dir,
+        org=org,
+        output_dir=output_dir,
     )
 
     console.print(
         f"[bold]Generating reports for: {org}[/bold]",
     )
     allowlist = reporter.generate_reports(
-        output_format=output_format, repo_filter=repo,
+        output_format=output_format,
+        repo_filter=repo,
     )
     console.print(
         f"  Unique endpoints: [bold]{len(allowlist)}[/bold]",
